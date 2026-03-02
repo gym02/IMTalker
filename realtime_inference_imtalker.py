@@ -198,13 +198,16 @@ def _run_one_chunk(
             tmp_wav = f.name
         pcm_24k = (chunk_24k * 32767.0).astype(np.int16).tobytes()
         _pcm_24k_to_wav_16k(pcm_24k, tmp_wav, sr_orig=sample_rate_orig, sr_target=16000)
+        t1 = time.perf_counter()
 
         tmp_mp4 = agent.run_audio_inference(
             ref_pil, tmp_wav, crop=crop, seed=seed, nfe=nfe, cfg_scale=cfg_scale
         )
+        t2 = time.perf_counter()
         if not tmp_mp4 or not os.path.exists(tmp_mp4):
             return
         frames_bgr = _video_path_to_frames_bgr(tmp_mp4)
+        t3 = time.perf_counter()
         if not frames_bgr:
             return
         with global_audio_lock:
@@ -213,7 +216,13 @@ def _run_one_chunk(
         if log_timing:
             elapsed = time.perf_counter() - t0
             ok = "OK" if elapsed < chunk_duration_sec else "LAG"
-            print(f"[realtime_inference_imtalker] segment inference {elapsed:.2f}s (chunk={chunk_duration_sec}s) [{ok}]")
+            prep = t1 - t0
+            infer = t2 - t1
+            read_back = t3 - t2
+            print(
+                f"[realtime_inference_imtalker] segment inference {elapsed:.2f}s (chunk={chunk_duration_sec}s) [{ok}] "
+                f"| prep_wav={prep:.2f}s run_audio_inference={infer:.2f}s read_frames={read_back:.2f}s"
+            )
     except Exception as e:
         print(f"[realtime_inference_imtalker] chunk error: {e}")
         traceback.print_exc()
