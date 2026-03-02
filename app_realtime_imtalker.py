@@ -201,7 +201,7 @@ class RealtimeIMTalkerWebSocket:
             seed=42,
             nfe=10,
             cfg_scale=3.0,
-            chunk_duration_sec=0.5,
+            chunk_duration_sec=2.0,
             flush_timeout_sec=0.2,
         )
         asyncio.create_task(asyncio.to_thread(realtime_inference_main, args))
