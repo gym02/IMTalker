@@ -1,6 +1,12 @@
 # realtime_inference_imtalker.py
 # 实时音频消费 -> IMTalker 推理 -> 输出视频帧段到 global_frame_map / global_audio_frame_map
 # 参考 navtalk Services/MuseTalk/scripts/realtime_inference.py 的循环与队列消费方式
+#
+# 实时性条件：每段音频 chunk_duration_sec（默认 0.5s）对应一段视频。
+# 播放端以实时速度消费（0.5s 内容用 0.5s 播完），故需满足：
+#   单段推理耗时 T_inference < chunk_duration_sec
+# 若 T_inference < 0.5s，生成速度高于消费速度，可实时或略有缓冲；
+# 若 T_inference > 0.5s，会落后，段间出现等待（卡顿/保持上一帧）。运行时会打印 [OK]/[LAG] 便于判断。
 
 import os
 import sys
@@ -140,6 +146,7 @@ def main(args: Namespace) -> None:
                 _run_one_chunk(
                     agent, ref_pil, chunk_24k, sample_rate_orig,
                     fps, crop, seed, nfe, cfg_scale, session_id,
+                    chunk_duration_sec=chunk_duration_sec,
                 )
                 accumulated_24k = np.array([], dtype=np.float32)
 
@@ -162,6 +169,7 @@ def main(args: Namespace) -> None:
                 _run_one_chunk(
                     agent, ref_pil, chunk_24k, sample_rate_orig,
                     fps, crop, seed, nfe, cfg_scale, session_id,
+                    chunk_duration_sec=chunk_duration_sec,
                 )
 
         time.sleep(0.001)
@@ -178,10 +186,13 @@ def _run_one_chunk(
     nfe: int,
     cfg_scale: float,
     session_id: str,
+    chunk_duration_sec: float = 0.5,
+    log_timing: bool = True,
 ) -> None:
     """将一块 24k 波形写成 16k WAV，跑 IMTalker，结果写入 global_frame_map / global_audio_frame_map."""
     tmp_wav = None
     tmp_mp4 = None
+    t0 = time.perf_counter()
     try:
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             tmp_wav = f.name
@@ -199,6 +210,10 @@ def _run_one_chunk(
         with global_audio_lock:
             global_frame_map.append(frames_bgr)
             global_audio_frame_map.append(chunk_24k.astype(np.float32))
+        if log_timing:
+            elapsed = time.perf_counter() - t0
+            ok = "OK" if elapsed < chunk_duration_sec else "LAG"
+            print(f"[realtime_inference_imtalker] segment inference {elapsed:.2f}s (chunk={chunk_duration_sec}s) [{ok}]")
     except Exception as e:
         print(f"[realtime_inference_imtalker] chunk error: {e}")
         traceback.print_exc()

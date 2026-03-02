@@ -128,8 +128,9 @@ class WebRTCStreamer:
         self.media_task: Optional[asyncio.Task] = None
         self._closed = False
         self.start_time = time.time()
-        # 默认黑帧 512x512
+        # 默认黑帧 512x512；等待下一段时保持上一段最后一帧，减少断断续续感
         self.default_frame = np.zeros((DEFAULT_VIDEO_SIZE[1], DEFAULT_VIDEO_SIZE[0], 3), dtype=np.uint8)
+        self.last_video_frame = None
 
     async def create_pc(self, ice_servers: Optional[List[dict]] = None):
         if self.pc and self.pc.connectionState not in ("closed", "failed"):
@@ -147,11 +148,15 @@ class WebRTCStreamer:
 
         @self.pc.on("connectionstatechange")
         async def _on_connectionstatechange():
+            if self.pc is None:
+                return
             if self.pc.connectionState in ("failed", "closed") and not self._closed:
                 asyncio.create_task(self.stop())
 
         @self.pc.on("iceconnectionstatechange")
         async def _on_iceconnectionstatechange():
+            if self.pc is None:
+                return
             if getattr(self.pc, "iceConnectionState", None) in ("closed", "failed", "disconnected") and not self._closed:
                 asyncio.create_task(self.stop())
 
@@ -291,6 +296,7 @@ class WebRTCStreamer:
     async def handle_connected_msg(self, data: dict):
         ice_servers = data.get("data", {}).get("iceServers") or data.get("iceServers")
         await self.create_pc(ice_servers=ice_servers)
+        self.last_video_frame = None
         self.video_track = SingleFrameVideoStreamTrack(frame=self.default_frame, fps=DEFAULT_FPS)
         self.audio_track = SingleFrameAudioStreamTrack(sample_rate=DEFAULT_SAMPLE_RATE, channels=1)
         self.video_track._start_time = time.monotonic()
@@ -326,6 +332,8 @@ class WebRTCStreamer:
             await task_v
         except asyncio.CancelledError:
             pass
+        if frames:
+            self.last_video_frame = np.asarray(frames[-1])
         print(f"[publish] Segment {segment_index} done, frames={len(frames)}")
 
     async def _push_audio(
@@ -392,7 +400,8 @@ class WebRTCStreamer:
                     share_state.segment_index += 1
                 else:
                     if self.video_track:
-                        await self.video_track.update_frame(self.default_frame)
+                        hold_frame = self.last_video_frame if self.last_video_frame is not None else self.default_frame
+                        await self.video_track.update_frame(hold_frame)
                     await asyncio.sleep(1 / DEFAULT_FPS)
         except asyncio.CancelledError:
             raise
