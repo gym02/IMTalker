@@ -280,6 +280,8 @@ class RealtimeIMTalkerWebSocket:
                 RealtimeMessageType.WEB_RTC_ICE_CANDIDATE,
             ):
                 await WebSocketStore.dispatch_message(self.session_id, message)
+            elif event_type == RealtimeMessageType.REALTIME_INPUT_TEXT:
+                await self._handle_input_text(data)
             else:
                 if self.openai_websocket and not self.openai_websocket.closed:
                     await self.openai_websocket.send_str(message)
@@ -293,6 +295,30 @@ class RealtimeIMTalkerWebSocket:
                 await session.close(message=str(e))
             except Exception:
                 pass
+
+    async def _handle_input_text(self, data: dict):
+        """将前端的 realtime.input.text 转为 OpenAI 的 conversation.item.create + response.create。"""
+        if not self.openai_websocket or self.openai_websocket.closed:
+            logger.warning("No OpenAI connection, drop text input")
+            return
+        payload = data.get("data") or {}
+        text = (payload.get("content") or payload.get("text") or "").strip()
+        if not text:
+            return
+        item_event = {
+            "type": "conversation.item.create",
+            "item": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": text}],
+            },
+        }
+        response_event = {"type": "response.create"}
+        try:
+            await self.openai_websocket.send_str(json.dumps(item_event))
+            await self.openai_websocket.send_str(json.dumps(response_event))
+        except Exception as e:
+            logger.error("Send text to OpenAI error: %s", e)
 
     async def _handle_connection_success(self, data: dict, message: str):
         provider_data = data.get("data", {}).get("provider")
