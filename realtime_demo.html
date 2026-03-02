@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IMTalker Realtime 测试</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #1a1a2e; color: #eee; }
+    h1 { margin-top: 0; }
+    .panel { background: #16213e; border-radius: 12px; padding: 16px; margin-bottom: 16px; }
+    label { display: block; margin-bottom: 4px; color: #aaa; font-size: 12px; }
+    input[type="text"], input[type="password"] { width: 100%; padding: 10px; border: 1px solid #333; border-radius: 8px; background: #0f0f1a; color: #eee; margin-bottom: 12px; }
+    button { padding: 10px 20px; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; }
+    button.primary { background: #4361ee; color: white; }
+    button.primary:hover { background: #3a56d4; }
+    button.danger { background: #e63946; color: white; }
+    button.danger:hover { background: #c1121f; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #videoWrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 1; max-width: 512px; margin: 0 auto 16px; }
+    #video { width: 100%; height: 100%; object-fit: contain; display: block; }
+    .status { padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
+    .status.connecting { background: #fef3c7; color: #92400e; }
+    .status.connected { background: #d1fae5; color: #065f46; }
+    .status.error { background: #fee2e2; color: #991b1b; }
+    .log { max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px; padding: 12px; background: #0f0f1a; border-radius: 8px; margin-top: 12px; }
+    .log div { margin-bottom: 4px; }
+    .log .in { color: #93c5fd; }
+    .log .out { color: #86efac; }
+    .log .err { color: #fca5a5; }
+  </style>
+</head>
+<body>
+  <h1>IMTalker Realtime 测试</h1>
+  <div class="panel">
+    <label>WebSocket 地址</label>
+    <input type="text" id="wsUrl" value="ws://localhost:8765/ws" placeholder="ws://localhost:8765/ws">
+    <label>Session ID（任意唯一字符串）</label>
+    <input type="text" id="sessionId" value="test-session-001" placeholder="test-session-001">
+    <label>Avatar 路径（服务器上的参考图，相对项目根）</label>
+    <input type="text" id="avatarPath" value="assets/source_1.png" placeholder="assets/source_1.png">
+    <div id="status" class="status" style="display:none;"></div>
+    <button id="btnConnect" class="primary">连接并开始</button>
+    <button id="btnDisconnect" class="danger" disabled>挂断</button>
+  </div>
+  <div class="panel">
+    <div id="videoWrap">
+      <video id="video" autoplay playsinline muted></video>
+    </div>
+    <label>文本输入（发送到 OpenAI）</label>
+    <input type="text" id="textInput" placeholder="输入后回车发送" disabled>
+  </div>
+  <div class="panel">
+    <strong>日志</strong>
+    <div id="log" class="log"></div>
+  </div>
+
+  <script>
+    const MsgType = {
+      CONNECTED_SUCCESS: "conversation.connected.success",
+      WEB_RTC_OFFER: "webrtc.signaling.offer",
+      WEB_RTC_ANSWER: "webrtc.signaling.answer",
+      WEB_RTC_ICE_CANDIDATE: "webrtc.signaling.iceCandidate",
+      REALTIME_INPUT_AUDIO_BUFFER_APPEND: "realtime.input_audio_buffer.append",
+      REALTIME_INPUT_TEXT: "realtime.input.text",
+    };
+
+    let socket = null;
+    let peerConnection = null;
+    let audioContext = null;
+    let audioProcessor = null;
+    let audioStream = null;
+    let configuration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    function log(msg, type = "") {
+      const el = document.getElementById("log");
+      const div = document.createElement("div");
+      div.className = type;
+      div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+      el.appendChild(div);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function setStatus(text, className) {
+      const el = document.getElementById("status");
+      el.style.display = "block";
+      el.textContent = text;
+      el.className = "status " + (className || "");
+    }
+
+    function handleMessage(event) {
+      const data = JSON.parse(event.data);
+      log("← " + data.type, "in");
+      switch (data.type) {
+        case MsgType.CONNECTED_SUCCESS:
+          if (data.data && data.data.iceServers) configuration.iceServers = data.data.iceServers;
+          socket.send(JSON.stringify({
+            type: MsgType.CONNECTED_SUCCESS,
+            message: "",
+            data: {
+              provider: {
+                url: "wss://api.openai.com/v1/realtime",
+                model: "gpt-4o-realtime-preview-2024-12-17",
+              },
+            },
+          }));
+          log("→ CONNECTED_SUCCESS (provider，API Key 使用服务端 .env)", "out");
+          break;
+        case MsgType.WEB_RTC_OFFER:
+          handleOffer(data.data);
+          break;
+        case MsgType.WEB_RTC_ANSWER:
+          handleAnswer(data.data);
+          break;
+        case MsgType.WEB_RTC_ICE_CANDIDATE:
+          handleIceCandidate(data.data);
+          break;
+        case "conversation.connected.close":
+        case "conversation.connected.fail":
+          setStatus(data.message || "连接关闭", "error");
+          break;
+        default:
+          if (data.type && data.type.includes("error")) setStatus(JSON.stringify(data), "error");
+      }
+    }
+
+    function handleOffer(message) {
+      const offer = new RTCSessionDescription(message.sdp);
+      peerConnection = new RTCPeerConnection(configuration);
+      peerConnection.setRemoteDescription(offer)
+        .then(() => peerConnection.createAnswer())
+        .then((answer) => peerConnection.setLocalDescription(answer))
+        .then(() => {
+          socket.send(JSON.stringify({
+            type: MsgType.WEB_RTC_ANSWER,
+            data: { sdp: peerConnection.localDescription },
+          }));
+          log("→ WEB_RTC_ANSWER", "out");
+        })
+        .catch((err) => log("offer/answer error: " + err, "err"));
+
+      peerConnection.onicecandidate = (e) => {
+        if (e.candidate) {
+          socket.send(JSON.stringify({
+            type: MsgType.WEB_RTC_ICE_CANDIDATE,
+            data: { candidate: e.candidate },
+          }));
+          log("→ ICE candidate", "out");
+        }
+      };
+
+      peerConnection.ontrack = (e) => {
+        if (e.streams && e.streams[0]) {
+          document.getElementById("video").srcObject = e.streams[0];
+          setStatus("已连接，可说话或输入文字", "connected");
+          startRecording();
+          document.getElementById("textInput").disabled = false;
+        }
+      };
+
+      peerConnection.oniceconnectionstatechange = () => {
+        log("ICE state: " + peerConnection.iceConnectionState);
+        if (peerConnection.iceConnectionState === "failed" || peerConnection.iceConnectionState === "disconnected")
+          setStatus("WebRTC: " + peerConnection.iceConnectionState, "error");
+      };
+    }
+
+    function handleAnswer(message) {
+      if (!peerConnection) return;
+      const answer = new RTCSessionDescription(message.sdp);
+      peerConnection.setRemoteDescription(answer).catch((e) => log("setRemoteDescription: " + e, "err"));
+    }
+
+    function handleIceCandidate(message) {
+      if (!peerConnection || !message.candidate) return;
+      const c = message.candidate;
+      const candidate = new RTCIceCandidate(c.candidate ? c : { candidate: c.candidate, sdpMid: c.sdpMid, sdpMLineIndex: c.sdpMLineIndex });
+      peerConnection.addIceCandidate(candidate).catch((e) => log("addIceCandidate: " + e, "err"));
+    }
+
+    function startRecording() {
+      navigator.mediaDevices.getUserMedia({ audio: true })
+        .then((stream) => {
+          audioStream = stream;
+          audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 24000 });
+          const source = audioContext.createMediaStreamSource(stream);
+          audioProcessor = audioContext.createScriptProcessor(8192, 1, 1);
+          audioProcessor.onaudioprocess = (e) => {
+            if (!socket || socket.readyState !== WebSocket.OPEN) return;
+            const input = e.inputBuffer.getChannelData(0);
+            const pcm = floatTo16BitPCM(input);
+            const base64 = btoa(String.fromCharCode.apply(null, new Uint8Array(pcm)));
+            const chunkSize = 4096;
+            for (let i = 0; i < base64.length; i += chunkSize) {
+              const chunk = base64.slice(i, i + chunkSize);
+              socket.send(JSON.stringify({
+                type: MsgType.REALTIME_INPUT_AUDIO_BUFFER_APPEND,
+                data: { audio: chunk },
+              }));
+            }
+          };
+          source.connect(audioProcessor);
+          audioProcessor.connect(audioContext.destination);
+          log("麦克风已开启");
+        })
+        .catch((e) => {
+          log("麦克风失败: " + e.message, "err");
+          setStatus("需要麦克风权限", "error");
+        });
+    }
+
+    function floatTo16BitPCM(float32Array) {
+      const buffer = new ArrayBuffer(float32Array.length * 2);
+      const view = new DataView(buffer);
+      let offset = 0;
+      for (let i = 0; i < float32Array.length; i++, offset += 2) {
+        const s = Math.max(-1, Math.min(1, float32Array[i]));
+        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      }
+      return buffer;
+    }
+
+    function stopRecording() {
+      if (audioProcessor) audioProcessor.disconnect();
+      if (audioStream) audioStream.getTracks().forEach((t) => t.stop());
+      audioContext = null;
+      audioProcessor = null;
+      audioStream = null;
+    }
+
+    function connect() {
+      const wsUrl = document.getElementById("wsUrl").value.trim();
+      const sessionId = document.getElementById("sessionId").value.trim();
+      const avatarPath = document.getElementById("avatarPath").value.trim();
+      const url = `${wsUrl}?session_id=${encodeURIComponent(sessionId)}&avatar_path=${encodeURIComponent(avatarPath)}`;
+      setStatus("连接中…", "connecting");
+      document.getElementById("btnConnect").disabled = true;
+      log("→ connect " + url, "out");
+      socket = new WebSocket(url);
+      socket.onopen = () => {
+        log("WebSocket 已打开");
+        setStatus("已连接，等待服务端 CONNECTED_SUCCESS…", "connecting");
+      };
+      socket.onmessage = handleMessage;
+      socket.onerror = (e) => {
+        log("WebSocket error", "err");
+        setStatus("WebSocket 错误", "error");
+      };
+      socket.onclose = () => {
+        log("WebSocket 已关闭");
+        setStatus("已断开", "error");
+        document.getElementById("btnConnect").disabled = false;
+        document.getElementById("btnDisconnect").disabled = true;
+        document.getElementById("textInput").disabled = true;
+        stopRecording();
+        if (peerConnection) {
+          peerConnection.close();
+          peerConnection = null;
+        }
+        document.getElementById("video").srcObject = null;
+      };
+      document.getElementById("btnDisconnect").disabled = false;
+    }
+
+    function disconnect() {
+      if (socket) socket.close();
+      socket = null;
+    }
+
+    document.getElementById("btnConnect").onclick = connect;
+    document.getElementById("btnDisconnect").onclick = disconnect;
+    document.getElementById("textInput").onkeydown = (e) => {
+      if (e.key !== "Enter") return;
+      const text = document.getElementById("textInput").value.trim();
+      if (!text || !socket || socket.readyState !== WebSocket.OPEN) return;
+      socket.send(JSON.stringify({
+        type: MsgType.REALTIME_INPUT_TEXT,
+        data: { content: text, reply: 1 },
+      }));
+      log("→ 文本: " + text, "out");
+      document.getElementById("textInput").value = "";
+    };
+  </script>
+</body>
+</html>

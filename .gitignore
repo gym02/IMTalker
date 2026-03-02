@@ -3,6 +3,9 @@
 venv/
 env/
 
+# 环境配置（含密钥，仅本地使用）
+.env
+
 # Model checkpoints (large files, download separately)
 checkpoints/
 
