@@ -47,23 +47,39 @@ OPENAI_WS_URL = os.getenv("OPENAI_WS_URL", "wss://api.openai.com/v1/realtime")
 OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
 REALTIME_WS_HOST = os.getenv("REALTIME_WS_HOST", "0.0.0.0")
 REALTIME_WS_PORT = int(os.getenv("REALTIME_WS_PORT", "8765"))
-# TURN（用于经 Cloudflare 等外网访问时 WebRTC 媒体中继），未设则仅用 STUN
-REALTIME_TURN_URLS = os.getenv("REALTIME_TURN_URLS", "")  # 逗号分隔，如 turn:turn.cloudflare.com:3478,turns:turn.cloudflare.com:5349
-REALTIME_TURN_USERNAME = os.getenv("REALTIME_TURN_USERNAME", "")
-REALTIME_TURN_CREDENTIAL = os.getenv("REALTIME_TURN_CREDENTIAL", "")
+# Cloudflare TURN（经外网访问时 WebRTC 媒体中继，自动拉取短期凭证）
+REALTIME_TURN_KEY_ID = os.getenv("REALTIME_TURN_KEY_ID", "")
+REALTIME_TURN_API_TOKEN = os.getenv("REALTIME_TURN_API_TOKEN", "")
+REALTIME_TURN_TTL = int(os.getenv("REALTIME_TURN_TTL", "86400"))
+
+_STUN_ONLY = [{"urls": "stun:stun.l.google.com:19302"}]
 
 
-def _get_ice_servers() -> list:
-    """STUN + 可选的 TURN（从 .env 读取），供前端与 publish 端一致使用。"""
-    ice = [{"urls": "stun:stun.l.google.com:19302"}]
-    urls = (REALTIME_TURN_URLS or "").strip()
-    username = (REALTIME_TURN_USERNAME or "").strip()
-    credential = (REALTIME_TURN_CREDENTIAL or "").strip()
-    if urls and username and credential:
-        url_list = [u.strip() for u in urls.split(",") if u.strip()]
-        if url_list:
-            ice.append({"urls": url_list, "username": username, "credential": credential})
-    return ice
+async def _get_ice_servers_async() -> list:
+    """用 Cloudflare TURN Key 拉取短期凭证；未配置或失败时仅用 STUN。"""
+    key_id = (REALTIME_TURN_KEY_ID or "").strip()
+    token = (REALTIME_TURN_API_TOKEN or "").strip()
+    if not key_id or not token:
+        return _STUN_ONLY
+    url = f"https://rtc.live.cloudflare.com/v1/turn/keys/{key_id}/credentials/generate-ice-servers"
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json={"ttl": REALTIME_TURN_TTL},
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    servers = data.get("iceServers")
+                    if isinstance(servers, list) and servers:
+                        return servers
+                else:
+                    logger.warning("Cloudflare TURN credentials fetch failed: %s %s", resp.status, await resp.text())
+    except Exception as e:
+        logger.warning("Cloudflare TURN fetch error: %s, using STUN only", e)
+    return _STUN_ONLY
 
 
 def _get_ffmpeg_exe() -> str:
@@ -227,12 +243,13 @@ class RealtimeIMTalkerWebSocket:
         asyncio.create_task(asyncio.to_thread(realtime_inference_main, args))
         asyncio.create_task(publish_main_async(avatar_path, session_id))
         if self.client_session and not self.client_session.closed:
+            ice_servers = await _get_ice_servers_async()
             await self.client_session.send_str(json.dumps({
                 "type": RealtimeMessageType.CONNECTED_SUCCESS,
                 "message": "",
                 "data": {
                     "session_id": session_id,
-                    "iceServers": _get_ice_servers(),
+                    "iceServers": ice_servers,
                 },
             }))
         share_state.should_stop = False
@@ -415,11 +432,28 @@ async def serve_demo_page(_request: web.Request) -> web.Response:
     return web.Response(text=body, content_type="text/html")
 
 
+def _asyncio_exception_handler(loop, context):
+    """将未捕获的 TURN/ICE 异常打成 warning，避免刷屏。"""
+    exc = context.get("exception")
+    if exc is not None and "aioice" in type(exc).__module__:
+        logger.warning("TURN/ICE task error (若连接正常可忽略): %s", exc)
+        return
+    loop.default_exception_handler(context)
+
+
 def create_app():
     app = web.Application()
     app.router.add_get("/ws", websocket_handler)
     app.router.add_get("/", serve_demo_page)
     app.router.add_get("/realtime_demo.html", serve_demo_page)
+
+    async def _set_ice_exception_handler(_app):
+        loop = asyncio.get_running_loop()
+        if not getattr(loop, "_imtalker_ice_handler_set", False):
+            loop.set_exception_handler(_asyncio_exception_handler)
+            loop._imtalker_ice_handler_set = True
+
+    app.on_startup.append(_set_ice_exception_handler)
     return app
 
 
