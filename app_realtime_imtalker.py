@@ -55,6 +55,23 @@ REALTIME_TURN_TTL = int(os.getenv("REALTIME_TURN_TTL", "86400"))
 _STUN_ONLY = [{"urls": "stun:stun.l.google.com:19302"}]
 
 
+def _filter_ice_servers_port53(servers: list) -> list:
+    """去掉 Cloudflare 返回的 port 53（浏览器易屏蔽导致 ICE 超时/失败）。"""
+    out = []
+    for s in servers:
+        s = dict(s)
+        urls = s.get("urls")
+        if isinstance(urls, list):
+            s["urls"] = [u for u in urls if ":53" not in str(u)]
+            if s["urls"]:
+                out.append(s)
+        elif isinstance(urls, str) and ":53" not in urls:
+            out.append(s)
+        elif urls is None:
+            out.append(s)
+    return out if out else _STUN_ONLY
+
+
 async def _get_ice_servers_async() -> list:
     """用 Cloudflare TURN Key 拉取短期凭证；未配置或失败时仅用 STUN。"""
     key_id = (REALTIME_TURN_KEY_ID or "").strip()
@@ -74,7 +91,7 @@ async def _get_ice_servers_async() -> list:
                     data = await resp.json()
                     servers = data.get("iceServers")
                     if isinstance(servers, list) and servers:
-                        return servers
+                        return _filter_ice_servers_port53(servers)
                 else:
                     logger.warning("Cloudflare TURN credentials fetch failed: %s %s", resp.status, await resp.text())
     except Exception as e:
@@ -131,7 +148,7 @@ class RealtimeIMTalkerWebSocket:
             self.openai_websocket = await self.client.ws_connect(
                 ws_url,
                 headers=headers,
-                timeout=aiohttp.ClientTimeout(total=30),
+                timeout=aiohttp.ClientWSTimeout(ws_close=30),
             )
             logger.info("OpenAI Realtime API connected")
             self.is_display_running = True
