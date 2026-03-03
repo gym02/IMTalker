@@ -324,6 +324,7 @@ class RealtimeIMTalkerWebSocket:
         text = (payload.get("content") or payload.get("text") or "").strip()
         if not text:
             return
+        logger.info("Received text input, sending to OpenAI: %.60s", text)
         item_event = {
             "type": "conversation.item.create",
             "item": {

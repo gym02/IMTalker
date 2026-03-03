@@ -36,15 +36,20 @@ from realtime_share_state import (
 
 # 延迟导入 app，避免与 Gradio 冲突
 def _get_imtalker_agent():
+    print("[realtime_inference_imtalker] Importing app module...", flush=True)
     import app as app_module
     if not hasattr(app_module, 'ensure_checkpoints'):
         raise RuntimeError("app module has no ensure_checkpoints")
+    print("[realtime_inference_imtalker] Checking/downloading checkpoints (may take 1-2 min on first run)...", flush=True)
     app_module.ensure_checkpoints()
+    print("[realtime_inference_imtalker] Checkpoints ready, loading model (InferenceAgent)...", flush=True)
     from app import AppConfig, InferenceAgent
     opt = AppConfig()
     if not os.path.exists(opt.renderer_path) or not os.path.exists(opt.generator_path):
         raise FileNotFoundError("IMTalker checkpoints not found.")
-    return InferenceAgent(opt)
+    agent = InferenceAgent(opt)
+    print("[realtime_inference_imtalker] InferenceAgent created.", flush=True)
+    return agent
 
 
 def _load_ref_image(avatar_path: str) -> Image.Image:
