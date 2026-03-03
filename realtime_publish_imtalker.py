@@ -127,6 +127,7 @@ class WebRTCStreamer:
         self.track_ready_event: Optional[asyncio.Event] = None
         self.media_task: Optional[asyncio.Task] = None
         self._closed = False
+        self._ice_restart_pending = False
         self.start_time = time.time()
         # 默认黑帧 512x512；等待下一段时保持上一段最后一帧，减少断断续续感
         self.default_frame = np.zeros((DEFAULT_VIDEO_SIZE[1], DEFAULT_VIDEO_SIZE[0], 3), dtype=np.uint8)
@@ -162,7 +163,10 @@ class WebRTCStreamer:
             if self.pc is None:
                 return
             if self.pc.connectionState in ("failed", "closed") and not self._closed:
-                print(f"[publish] PeerConnection state={self.pc.connectionState}, stopping (often due to NAT when using Cloudflare Tunnel)")
+                if self._ice_restart_pending:
+                    print(f"[publish] PeerConnection {self.pc.connectionState} during ICE restart, waiting for answer (ignore)")
+                    return
+                print(f"[publish] PeerConnection state={self.pc.connectionState}, stopping")
                 asyncio.create_task(self.stop())
 
         @self.pc.on("iceconnectionstatechange")
@@ -170,9 +174,11 @@ class WebRTCStreamer:
             if self.pc is None:
                 return
             state = getattr(self.pc, "iceConnectionState", None)
-            # 仅在 failed/closed 时关闭；disconnected 可能是暂时断线，不要立刻 stop 否则无法恢复
             if state in ("closed", "failed") and not self._closed:
-                print(f"[publish] ICE state={state}, stopping (browser cannot reach server for media - need TURN if using https://devrealtime.navtalk.ai/)")
+                if self._ice_restart_pending:
+                    print(f"[publish] ICE state={state} during ICE restart, waiting for answer (ignore)")
+                    return
+                print(f"[publish] ICE state={state}, stopping")
                 asyncio.create_task(self.stop())
 
         @self.pc.on("icecandidate")
@@ -256,6 +262,7 @@ class WebRTCStreamer:
     async def handle_answer(self, data: dict):
         if not self.pc:
             return
+        self._ice_restart_pending = False
         sdp = data.get("data", {}).get("sdp")
         if not sdp:
             return
@@ -264,15 +271,17 @@ class WebRTCStreamer:
         print("[publish] Remote answer applied")
 
     async def handle_ice_restart_request(self):
-        """前端请求 ICE 重协商时，重新发 offer，缓解 disconnected 断断续续。"""
+        """前端请求 ICE 重协商时，重新发 offer；重协商过程中忽略 closed 避免误停。"""
         if not self.pc or self._closed:
             return
         if self.pc.connectionState in ("closed", "failed"):
             return
         try:
+            self._ice_restart_pending = True
             print("[publish] ICE restart: sending new offer")
             await self.create_and_send_offer()
         except Exception as e:
+            self._ice_restart_pending = False
             print(f"[publish] ICE restart error: {e}")
 
     async def handle_ice_candidate(self, data: dict):

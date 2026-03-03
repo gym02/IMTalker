@@ -126,7 +126,10 @@
           setStatus(data.message || "连接关闭", "error");
           break;
         default:
-          if (data.type && data.type.includes("error")) setStatus(JSON.stringify(data), "error");
+          if (data.type && data.type.includes("error")) {
+            log("← error: " + (data.message || data.error || JSON.stringify(data)), "err");
+            setStatus(data.message || (data.error && data.error.message) || "error", "error");
+          }
       }
     }
 
@@ -192,13 +195,30 @@
         }
       };
 
+      function logIceStats(reason) {
+        if (!peerConnection || !peerConnection.getStats) return;
+        peerConnection.getStats().then(stats => {
+          stats.forEach(report => {
+            if (report.type === "candidate-pair" && (report.state === "succeeded" || report.state === "disconnected")) {
+              const local = stats.get(report.localCandidateId);
+              const remote = stats.get(report.remoteCandidateId);
+              const localType = local ? local.candidateType : "?";
+              const remoteType = remote ? remote.candidateType : "?";
+              log("[ICE] " + reason + " 候选对: local=" + localType + " remote=" + remoteType + " state=" + report.state, "err");
+            }
+          });
+        }).catch(() => {});
+      }
+
       peerConnection.oniceconnectionstatechange = () => {
         const state = peerConnection.iceConnectionState;
         log("ICE state: " + state);
         clearIceRestartTimer();
-        if (state === "failed")
+        if (state === "failed") {
           setStatus("WebRTC 连接失败（若经 Cloudflare 访问，可能需要 TURN 中继）", "error");
-        else if (state === "disconnected") {
+          logIceStats("failed");
+        } else if (state === "disconnected") {
+          logIceStats("disconnected");
           setStatus("连接不稳定，正在重连…", "connecting");
           iceRestartTimerId = setTimeout(() => {
             iceRestartTimerId = null;
