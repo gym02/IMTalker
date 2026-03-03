@@ -302,14 +302,14 @@ class RealtimeIMTalkerWebSocket:
                 pass
 
     async def _handle_input_audio_append(self, data: dict):
-        """将前端的 realtime.input_audio_buffer.append 转为 OpenAI 的 input_audio_buffer.append（delta=base64）。"""
+        """将前端的 realtime.input_audio_buffer.append 转为 OpenAI 的 input_audio_buffer.append（API 要求参数名为 audio）。"""
         if not self.openai_websocket or self.openai_websocket.closed:
             return
         payload = data.get("data") or {}
-        delta_b64 = payload.get("audio") or payload.get("delta") or ""
-        if not delta_b64:
+        audio_b64 = payload.get("audio") or payload.get("delta") or ""
+        if not audio_b64:
             return
-        openai_event = {"type": "input_audio_buffer.append", "delta": delta_b64}
+        openai_event = {"type": "input_audio_buffer.append", "audio": audio_b64}
         try:
             await self.openai_websocket.send_str(json.dumps(openai_event))
         except Exception as e:
