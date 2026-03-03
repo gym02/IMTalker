@@ -11,6 +11,7 @@ class RealtimeMessageType(str, Enum):
     WEB_RTC_OFFER = "webrtc.signaling.offer"
     WEB_RTC_ANSWER = "webrtc.signaling.answer"
     WEB_RTC_ICE_CANDIDATE = "webrtc.signaling.iceCandidate"
+    WEB_RTC_ICE_RESTART_REQUEST = "webrtc.signaling.iceRestartRequest"
     WEB_RTC_IN_BREAK = "webrtc.streaming.break"
 
     REALTIME_SESSION_CREATED = "realtime.session.created"

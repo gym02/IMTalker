@@ -263,6 +263,18 @@ class WebRTCStreamer:
         await self.pc.setRemoteDescription(answer)
         print("[publish] Remote answer applied")
 
+    async def handle_ice_restart_request(self):
+        """前端请求 ICE 重协商时，重新发 offer，缓解 disconnected 断断续续。"""
+        if not self.pc or self._closed:
+            return
+        if self.pc.connectionState in ("closed", "failed"):
+            return
+        try:
+            print("[publish] ICE restart: sending new offer")
+            await self.create_and_send_offer()
+        except Exception as e:
+            print(f"[publish] ICE restart error: {e}")
+
     async def handle_ice_candidate(self, data: dict):
         if not self.pc:
             return
@@ -305,6 +317,8 @@ class WebRTCStreamer:
             await self.handle_answer(data)
         elif mtype == RealtimeMessageType.WEB_RTC_ICE_CANDIDATE:
             await self.handle_ice_candidate(data)
+        elif mtype == RealtimeMessageType.WEB_RTC_ICE_RESTART_REQUEST:
+            await self.handle_ice_restart_request()
         elif mtype == RealtimeMessageType.WEB_RTC_IN_BREAK:
             pass  # 可选：清空本地队列
 

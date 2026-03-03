@@ -61,12 +61,14 @@
       WEB_RTC_OFFER: "webrtc.signaling.offer",
       WEB_RTC_ANSWER: "webrtc.signaling.answer",
       WEB_RTC_ICE_CANDIDATE: "webrtc.signaling.iceCandidate",
+      WEB_RTC_ICE_RESTART_REQUEST: "webrtc.signaling.iceRestartRequest",
       REALTIME_INPUT_AUDIO_BUFFER_APPEND: "realtime.input_audio_buffer.append",
       REALTIME_INPUT_TEXT: "realtime.input.text",
     };
 
     let socket = null;
     let peerConnection = null;
+    let iceRestartTimerId = null;
     let audioContext = null;
     let audioProcessor = null;
     let audioStream = null;
@@ -108,7 +110,10 @@
           log("→ CONNECTED_SUCCESS (provider + iceServers)", "out");
           break;
         case MsgType.WEB_RTC_OFFER:
-          handleOffer(data.data);
+          if (peerConnection && peerConnection.iceConnectionState !== "new")
+            handleOfferRestart(data.data);
+          else
+            handleOffer(data.data);
           break;
         case MsgType.WEB_RTC_ANSWER:
           handleAnswer(data.data);
@@ -125,9 +130,28 @@
       }
     }
 
+    function clearIceRestartTimer() {
+      if (iceRestartTimerId) {
+        clearTimeout(iceRestartTimerId);
+        iceRestartTimerId = null;
+      }
+    }
+
+    function hasTurnServers() {
+      if (!configuration.iceServers || !configuration.iceServers.length) return false;
+      for (const s of configuration.iceServers) {
+        const u = s.urls;
+        const str = Array.isArray(u) ? u.join(" ") : (u || "");
+        if (str.indexOf("turn") !== -1) return true;
+      }
+      return false;
+    }
+
     function handleOffer(message) {
       const offer = new RTCSessionDescription(message.sdp);
-      peerConnection = new RTCPeerConnection(configuration);
+      const pcConfig = { ...configuration };
+      if (hasTurnServers()) pcConfig.iceTransportPolicy = "relay";
+      peerConnection = new RTCPeerConnection(pcConfig);
       peerConnection.setRemoteDescription(offer)
         .then(() => peerConnection.createAnswer())
         .then((answer) => peerConnection.setLocalDescription(answer))
@@ -162,13 +186,37 @@
       peerConnection.oniceconnectionstatechange = () => {
         const state = peerConnection.iceConnectionState;
         log("ICE state: " + state);
+        clearIceRestartTimer();
         if (state === "failed")
           setStatus("WebRTC 连接失败（若经 Cloudflare 访问，可能需要 TURN 中继）", "error");
-        else if (state === "disconnected")
+        else if (state === "disconnected") {
           setStatus("连接不稳定，正在重连…", "connecting");
-        else if (state === "connected")
+          iceRestartTimerId = setTimeout(() => {
+            iceRestartTimerId = null;
+            if (peerConnection && peerConnection.iceConnectionState === "disconnected" && socket && socket.readyState === WebSocket.OPEN) {
+              socket.send(JSON.stringify({ type: MsgType.WEB_RTC_ICE_RESTART_REQUEST, data: {} }));
+              log("→ ICE 重协商请求", "out");
+            }
+          }, 4000);
+        } else if (state === "connected")
           setStatus("已连接，可说话或输入文字", "connected");
       };
+    }
+
+    function handleOfferRestart(message) {
+      if (!peerConnection || !message || !message.sdp) return;
+      const offer = new RTCSessionDescription(message.sdp);
+      peerConnection.setRemoteDescription(offer)
+        .then(() => peerConnection.createAnswer())
+        .then((answer) => peerConnection.setLocalDescription(answer))
+        .then(() => {
+          socket.send(JSON.stringify({
+            type: MsgType.WEB_RTC_ANSWER,
+            data: { sdp: peerConnection.localDescription },
+          }));
+          log("→ WEB_RTC_ANSWER (ICE 重协商)", "out");
+        })
+        .catch((err) => log("ICE 重协商 error: " + err, "err"));
     }
 
     function handleAnswer(message) {
@@ -269,6 +317,7 @@
     }
 
     function disconnect() {
+      clearIceRestartTimer();
       if (socket) socket.close();
       socket = null;
     }
