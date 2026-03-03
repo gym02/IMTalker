@@ -19,6 +19,9 @@
     button:disabled { opacity: 0.5; cursor: not-allowed; }
     #videoWrap { position: relative; background: #000; border-radius: 12px; overflow: hidden; aspect-ratio: 1; max-width: 512px; margin: 0 auto 16px; }
     #video { width: 100%; height: 100%; object-fit: contain; display: block; }
+    #videoPlaceholder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #0f0f1a; color: #888; font-size: 14px; }
+    #videoWrap.video-ready #videoPlaceholder { display: none; }
+    #videoWrap:not(.video-ready) #video { visibility: hidden; }
     .status { padding: 8px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px; }
     .status.connecting { background: #fef3c7; color: #92400e; }
     .status.connected { background: #d1fae5; color: #065f46; }
@@ -45,6 +48,7 @@
   </div>
   <div class="panel">
     <div id="videoWrap">
+      <div id="videoPlaceholder">等待视频…</div>
       <video id="video" autoplay playsinline muted></video>
     </div>
     <label>文本输入（发送到 OpenAI）</label>
@@ -72,7 +76,31 @@
     let audioContext = null;
     let audioProcessor = null;
     let audioStream = null;
+    let videoReady = false;
     let configuration = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+
+    function setVideoReady(ready) {
+      videoReady = !!ready;
+      const wrap = document.getElementById("videoWrap");
+      if (wrap) wrap.classList.toggle("video-ready", videoReady);
+    }
+
+    function bindVideoAndWaitReady(videoEl, stream) {
+      if (!videoEl || !stream) return;
+      setVideoReady(false);
+      videoEl.srcObject = stream;
+      videoEl.play().catch(() => {});
+      const onReady = () => {
+        setVideoReady(true);
+        log("视频可播放，已显示", "in");
+      };
+      if (videoEl.readyState >= 3) {
+        onReady();
+      } else {
+        videoEl.addEventListener("canplay", onReady, { once: true });
+        videoEl.addEventListener("loadeddata", onReady, { once: true });
+      }
+    }
 
     function log(msg, type = "") {
       const el = document.getElementById("log");
@@ -151,6 +179,7 @@
     }
 
     function handleOffer(message) {
+      setVideoReady(false);
       const offer = new RTCSessionDescription(message.sdp);
       const pcConfig = { ...configuration };
       if (hasTurnServers()) pcConfig.iceTransportPolicy = "relay";
@@ -181,8 +210,7 @@
         const videoEl = document.getElementById("video");
         if (e.track.kind === "video") {
           const stream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
-          videoEl.srcObject = stream;
-          videoEl.play().catch(() => {});
+          bindVideoAndWaitReady(videoEl, stream);
           log("收到视频轨道，已绑定", "in");
         }
         if (e.track.kind === "audio") {
@@ -227,15 +255,14 @@
               log("→ ICE 重协商请求", "out");
             }
           }, 4000);
-        }         else if (state === "connected") {
+        } else if (state === "connected") {
           setStatus("已连接，可说话或输入文字", "connected");
           const videoEl = document.getElementById("video");
-          if (!videoEl.srcObject && peerConnection.getReceivers) {
+          if (peerConnection.getReceivers) {
             const videoRecv = peerConnection.getReceivers().find(r => r.track && r.track.kind === "video");
             if (videoRecv && videoRecv.track) {
-              videoEl.srcObject = new MediaStream([videoRecv.track]);
-              videoEl.play().catch(() => {});
-              log("ICE 已连接，已从 receiver 绑定视频", "in");
+              bindVideoAndWaitReady(videoEl, new MediaStream([videoRecv.track]));
+              log("ICE 已连接，已绑定视频并播放", "in");
             }
           }
         }
@@ -351,6 +378,7 @@
           peerConnection = null;
         }
         document.getElementById("video").srcObject = null;
+        setVideoReady(false);
       };
       document.getElementById("btnDisconnect").disabled = false;
     }
