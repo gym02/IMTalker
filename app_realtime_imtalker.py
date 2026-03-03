@@ -383,9 +383,26 @@ async def websocket_handler(request: web.Request):
     return ws
 
 
+async def serve_demo_page(_request: web.Request) -> web.Response:
+    """提供 realtime_demo.html，便于通过 https://devrealtime.navtalk.ai/ 等访问。"""
+    path = os.path.join(_PROJECT_ROOT, "realtime_demo.html")
+    if not os.path.isfile(path):
+        logger.warning("realtime_demo.html not found at %s", path)
+        return web.Response(
+            text=f"realtime_demo.html not found at {path}. Run from project root.",
+            status=404,
+            content_type="text/plain; charset=utf-8",
+        )
+    with open(path, "r", encoding="utf-8") as f:
+        body = f.read()
+    return web.Response(text=body, content_type="text/html; charset=utf-8")
+
+
 def create_app():
     app = web.Application()
     app.router.add_get("/ws", websocket_handler)
+    app.router.add_get("/", serve_demo_page)
+    app.router.add_get("/realtime_demo.html", serve_demo_page)
     return app
 
 
@@ -397,6 +414,7 @@ def main():
     args = parser.parse_args()
     app = create_app()
     logger.info("Realtime WebSocket server: ws://%s:%d/ws", args.host, args.port)
+    logger.info("Demo page: http://%s:%d/ (or https://devrealtime.navtalk.ai/ via tunnel)", args.host, args.port)
     web.run_app(app, host=args.host, port=args.port)
 
 
