@@ -175,8 +175,17 @@
       };
 
       peerConnection.ontrack = (e) => {
+        const videoEl = document.getElementById("video");
+        if (e.track.kind === "video") {
+          const stream = e.streams && e.streams[0] ? e.streams[0] : new MediaStream([e.track]);
+          videoEl.srcObject = stream;
+          videoEl.play().catch(() => {});
+          log("收到视频轨道，已绑定", "in");
+        }
+        if (e.track.kind === "audio") {
+          log("收到音频轨道", "in");
+        }
         if (e.streams && e.streams[0]) {
-          document.getElementById("video").srcObject = e.streams[0];
           setStatus("已连接，可说话或输入文字", "connected");
           startRecording();
           document.getElementById("textInput").disabled = false;
@@ -198,8 +207,18 @@
               log("→ ICE 重协商请求", "out");
             }
           }, 4000);
-        } else if (state === "connected")
+        }         else if (state === "connected") {
           setStatus("已连接，可说话或输入文字", "connected");
+          const videoEl = document.getElementById("video");
+          if (!videoEl.srcObject && peerConnection.getReceivers) {
+            const videoRecv = peerConnection.getReceivers().find(r => r.track && r.track.kind === "video");
+            if (videoRecv && videoRecv.track) {
+              videoEl.srcObject = new MediaStream([videoRecv.track]);
+              videoEl.play().catch(() => {});
+              log("ICE 已连接，已从 receiver 绑定视频", "in");
+            }
+          }
+        }
       };
     }
 
