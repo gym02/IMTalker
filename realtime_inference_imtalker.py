@@ -111,19 +111,20 @@ def main(args: Namespace) -> None:
     sample_rate_imtalker = 16000
     chunk_samples_24k = int(sample_rate_orig * chunk_duration_sec)
 
-    print("[realtime_inference_imtalker] Loading IMTalker model and ref image...")
+    print("[realtime_inference_imtalker] Loading IMTalker model and ref image... (first run may take 1-2 min: checkpoints + model load)", flush=True)
     try:
         agent = _get_imtalker_agent()
         ref_pil = _load_ref_image(avatar_path)
     except Exception as e:
-        print(f"[realtime_inference_imtalker] Init failed: {e}")
+        print(f"[realtime_inference_imtalker] Init failed: {e}", flush=True)
         traceback.print_exc()
         return
 
+    print("[realtime_inference_imtalker] Model and ref image loaded, entering inference loop.", flush=True)
     accumulated_24k = np.array([], dtype=np.float32)
     last_audio_time = time.time()
 
-    print(f"[realtime_inference_imtalker] session_id={session_id}, chunk={chunk_duration_sec}s, fps={fps}")
+    print(f"[realtime_inference_imtalker] session_id={session_id}, chunk={chunk_duration_sec}s, fps={fps}", flush=True)
 
     while True:
         if share_state.should_stop:

@@ -39,6 +39,8 @@ from realtime_publish_imtalker import main_async as publish_main_async
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+# 减少 aioice 的 ICE 候选检查刷屏，避免误以为卡在 "could not be resolved"
+logging.getLogger("aioice.ice").setLevel(logging.WARNING)
 
 # 从 .env 读取配置，缺省时使用下列默认值
 OPENAI_WS_URL = os.getenv("OPENAI_WS_URL", "wss://api.openai.com/v1/realtime")
@@ -204,6 +206,7 @@ class RealtimeIMTalkerWebSocket:
             chunk_duration_sec=2.0,
             flush_timeout_sec=0.2,
         )
+        logger.info("Starting IMTalker inference thread (model loading in background, may take 1-2 min on first run)...")
         asyncio.create_task(asyncio.to_thread(realtime_inference_main, args))
         asyncio.create_task(publish_main_async(avatar_path, session_id))
         if self.client_session and not self.client_session.closed:
@@ -282,6 +285,8 @@ class RealtimeIMTalkerWebSocket:
                 await WebSocketStore.dispatch_message(self.session_id, message)
             elif event_type == RealtimeMessageType.REALTIME_INPUT_TEXT:
                 await self._handle_input_text(data)
+            elif event_type == RealtimeMessageType.REALTIME_INPUT_AUDIO_BUFFER_APPEND:
+                await self._handle_input_audio_append(data)
             else:
                 if self.openai_websocket and not self.openai_websocket.closed:
                     await self.openai_websocket.send_str(message)
@@ -295,6 +300,20 @@ class RealtimeIMTalkerWebSocket:
                 await session.close(message=str(e))
             except Exception:
                 pass
+
+    async def _handle_input_audio_append(self, data: dict):
+        """将前端的 realtime.input_audio_buffer.append 转为 OpenAI 的 input_audio_buffer.append（delta=base64）。"""
+        if not self.openai_websocket or self.openai_websocket.closed:
+            return
+        payload = data.get("data") or {}
+        delta_b64 = payload.get("audio") or payload.get("delta") or ""
+        if not delta_b64:
+            return
+        openai_event = {"type": "input_audio_buffer.append", "delta": delta_b64}
+        try:
+            await self.openai_websocket.send_str(json.dumps(openai_event))
+        except Exception as e:
+            logger.error("Send audio to OpenAI error: %s", e)
 
     async def _handle_input_text(self, data: dict):
         """将前端的 realtime.input.text 转为 OpenAI 的 conversation.item.create + response.create。"""
