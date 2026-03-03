@@ -138,9 +138,20 @@ class WebRTCStreamer:
         ice_list = []
         if ice_servers:
             try:
-                ice_list = [RTCIceServer(**s) for s in ice_servers]
-            except Exception:
-                pass
+                for s in ice_servers:
+                    urls = s.get("urls")
+                    if isinstance(urls, list):
+                        for u in urls:
+                            kw = {"urls": u}
+                            if s.get("username") is not None:
+                                kw["username"] = s["username"]
+                            if s.get("credential") is not None:
+                                kw["credential"] = s["credential"]
+                            ice_list.append(RTCIceServer(**kw))
+                    else:
+                        ice_list.append(RTCIceServer(**s))
+            except Exception as e:
+                print(f"[publish] ICE config error: {e}")
         if not ice_list:
             ice_list = [RTCIceServer(urls="stun:stun.l.google.com:19302")]
         self.pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice_list))
@@ -151,6 +162,7 @@ class WebRTCStreamer:
             if self.pc is None:
                 return
             if self.pc.connectionState in ("failed", "closed") and not self._closed:
+                print(f"[publish] PeerConnection state={self.pc.connectionState}, stopping (often due to NAT when using Cloudflare Tunnel)")
                 asyncio.create_task(self.stop())
 
         @self.pc.on("iceconnectionstatechange")
@@ -160,6 +172,7 @@ class WebRTCStreamer:
             state = getattr(self.pc, "iceConnectionState", None)
             # 仅在 failed/closed 时关闭；disconnected 可能是暂时断线，不要立刻 stop 否则无法恢复
             if state in ("closed", "failed") and not self._closed:
+                print(f"[publish] ICE state={state}, stopping (browser cannot reach server for media - need TURN if using https://devrealtime.navtalk.ai/)")
                 asyncio.create_task(self.stop())
 
         @self.pc.on("icecandidate")

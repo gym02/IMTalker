@@ -102,9 +102,10 @@
                 url: "wss://api.openai.com/v1/realtime",
                 model: "gpt-4o-realtime-preview-2024-12-17",
               },
+              iceServers: configuration.iceServers,
             },
           }));
-          log("→ CONNECTED_SUCCESS (provider，API Key 使用服务端 .env)", "out");
+          log("→ CONNECTED_SUCCESS (provider + iceServers)", "out");
           break;
         case MsgType.WEB_RTC_OFFER:
           handleOffer(data.data);

@@ -47,6 +47,23 @@ OPENAI_WS_URL = os.getenv("OPENAI_WS_URL", "wss://api.openai.com/v1/realtime")
 OPENAI_REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview-2024-12-17")
 REALTIME_WS_HOST = os.getenv("REALTIME_WS_HOST", "0.0.0.0")
 REALTIME_WS_PORT = int(os.getenv("REALTIME_WS_PORT", "8765"))
+# TURN（用于经 Cloudflare 等外网访问时 WebRTC 媒体中继），未设则仅用 STUN
+REALTIME_TURN_URLS = os.getenv("REALTIME_TURN_URLS", "")  # 逗号分隔，如 turn:turn.cloudflare.com:3478,turns:turn.cloudflare.com:5349
+REALTIME_TURN_USERNAME = os.getenv("REALTIME_TURN_USERNAME", "")
+REALTIME_TURN_CREDENTIAL = os.getenv("REALTIME_TURN_CREDENTIAL", "")
+
+
+def _get_ice_servers() -> list:
+    """STUN + 可选的 TURN（从 .env 读取），供前端与 publish 端一致使用。"""
+    ice = [{"urls": "stun:stun.l.google.com:19302"}]
+    urls = (REALTIME_TURN_URLS or "").strip()
+    username = (REALTIME_TURN_USERNAME or "").strip()
+    credential = (REALTIME_TURN_CREDENTIAL or "").strip()
+    if urls and username and credential:
+        url_list = [u.strip() for u in urls.split(",") if u.strip()]
+        if url_list:
+            ice.append({"urls": url_list, "username": username, "credential": credential})
+    return ice
 
 
 def _get_ffmpeg_exe() -> str:
@@ -215,7 +232,7 @@ class RealtimeIMTalkerWebSocket:
                 "message": "",
                 "data": {
                     "session_id": session_id,
-                    "iceServers": [{"urls": "stun:stun.l.google.com:19302"}],
+                    "iceServers": _get_ice_servers(),
                 },
             }))
         share_state.should_stop = False
