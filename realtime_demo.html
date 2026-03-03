@@ -159,9 +159,14 @@
       };
 
       peerConnection.oniceconnectionstatechange = () => {
-        log("ICE state: " + peerConnection.iceConnectionState);
-        if (peerConnection.iceConnectionState === "failed" || peerConnection.iceConnectionState === "disconnected")
-          setStatus("WebRTC: " + peerConnection.iceConnectionState, "error");
+        const state = peerConnection.iceConnectionState;
+        log("ICE state: " + state);
+        if (state === "failed")
+          setStatus("WebRTC 连接失败（若经 Cloudflare 访问，可能需要 TURN 中继）", "error");
+        else if (state === "disconnected")
+          setStatus("连接不稳定，正在重连…", "connecting");
+        else if (state === "connected")
+          setStatus("已连接，可说话或输入文字", "connected");
       };
     }
 

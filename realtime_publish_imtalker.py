@@ -157,7 +157,9 @@ class WebRTCStreamer:
         async def _on_iceconnectionstatechange():
             if self.pc is None:
                 return
-            if getattr(self.pc, "iceConnectionState", None) in ("closed", "failed", "disconnected") and not self._closed:
+            state = getattr(self.pc, "iceConnectionState", None)
+            # 仅在 failed/closed 时关闭；disconnected 可能是暂时断线，不要立刻 stop 否则无法恢复
+            if state in ("closed", "failed") and not self._closed:
                 asyncio.create_task(self.stop())
 
         @self.pc.on("icecandidate")
