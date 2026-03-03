@@ -267,6 +267,12 @@
       socket = null;
     }
 
+    // 通过域名访问时（如 https://devrealtime.navtalk.ai/）自动用当前主机连 WebSocket，否则连不到服务器
+    if (location.host) {
+      var wsScheme = location.protocol === "https:" ? "wss:" : "ws:";
+      document.getElementById("wsUrl").value = wsScheme + "//" + location.host + "/ws";
+      document.getElementById("wsUrl").placeholder = wsScheme + "//" + location.host + "/ws";
+    }
     document.getElementById("btnConnect").onclick = connect;
     document.getElementById("btnDisconnect").onclick = disconnect;
     document.getElementById("textInput").onkeydown = (e) => {
