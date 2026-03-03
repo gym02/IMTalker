@@ -391,11 +391,11 @@ async def serve_demo_page(_request: web.Request) -> web.Response:
         return web.Response(
             text=f"realtime_demo.html not found at {path}. Run from project root.",
             status=404,
-            content_type="text/plain; charset=utf-8",
+            content_type="text/plain",
         )
     with open(path, "r", encoding="utf-8") as f:
         body = f.read()
-    return web.Response(text=body, content_type="text/html; charset=utf-8")
+    return web.Response(text=body, content_type="text/html")
 
 
 def create_app():
