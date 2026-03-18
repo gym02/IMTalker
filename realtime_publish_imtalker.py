@@ -109,6 +109,45 @@ class SingleFrameAudioStreamTrack(AudioStreamTrack):
 
     def push_audio_data(self, pcm_int16: np.ndarray):
         self.audio_queue.append(pcm_int16)
+def imread_unicode(img_path: str) -> Optional[np.ndarray]:
+    """
+    读取图片文件，支持中文路径和特殊字符
+
+    Args:
+        img_path: 图片路径
+
+    Returns:
+        图片数组，失败返回None
+    """
+    # 尝试1: 直接读取
+    try:
+        img = cv2.imread(img_path)
+        if img is not None:
+            return img
+    except Exception:
+        pass
+
+    # 尝试2: 读取为二进制后解码
+    try:
+        with open(img_path, 'rb') as f:
+            img_data = f.read()
+        img_array = np.frombuffer(img_data, dtype=np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if img is not None:
+            return img
+    except Exception:
+        pass
+
+    # 尝试3: 使用np.fromfile
+    try:
+        img_array = np.fromfile(img_path, dtype=np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if img is not None:
+            return img
+    except Exception:
+        pass
+
+    return None
 
 
 class WebRTCStreamer:
@@ -118,6 +157,7 @@ class WebRTCStreamer:
         self,
         send_ws_func: Callable,
         session_id: str,
+        avatar_path: str,
     ):
         self.send_ws = send_ws_func
         self.target_session_id = session_id
@@ -130,7 +170,8 @@ class WebRTCStreamer:
         self._ice_restart_pending = False
         self.start_time = time.time()
         # 默认黑帧 512x512；等待下一段时保持上一段最后一帧，减少断断续续感
-        self.default_frame = np.zeros((DEFAULT_VIDEO_SIZE[1], DEFAULT_VIDEO_SIZE[0], 3), dtype=np.uint8)
+        # self.default_frame = np.zeros((DEFAULT_VIDEO_SIZE[1], DEFAULT_VIDEO_SIZE[0], 3), dtype=np.uint8)
+        self.default_frame = imread_unicode(avatar_path)
         self.last_video_frame = None
 
     async def create_pc(self, ice_servers: Optional[List[dict]] = None):
@@ -493,6 +534,7 @@ async def main_async(avatar_path: str, session_id: str):
     streamer = WebRTCStreamer(
         send_ws_func=WebSocketStore.send,
         session_id=session_id,
+        avatar_path=avatar_path,
     )
     WebSocketStore.register_listener(session_id, streamer.on_message)
     streamer.start_media_task()
